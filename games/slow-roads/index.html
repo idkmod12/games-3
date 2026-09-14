@@ -1,0 +1,762 @@
+<!DOCTYPE html><html lang="en"><head>
+    <base href="https://cdn.jsdelivr.net/gh/ccported/games@68a06c5354670671f783001244065d1b45225074/game_d7b2_9a27357abcb8c/">
+<script>
+    (function () {
+        // V6
+        var base = document.querySelector('base');
+        var CDN_BASE = base ? base.href : '';
+        if (!CDN_BASE) {
+            console.log('CDN_BASE not found.');
+            return;
+        }
+        console.log('CDN_BASE:', CDN_BASE);
+
+        // Transfer notification system
+        let transferNotification = null;
+        let hideTimeout = null;
+        let requestsToMake = 0;
+        let requestsCompleted = 0;
+        let totalBytesTransferred = 0;
+        let bytesToTransfer = 0;
+
+        function createNotification() {
+            if (transferNotification) return transferNotification;
+
+            const notification = document.createElement('div');
+            notification.style.cssText = `
+                position: fixed;
+                top: 20px;
+                right: 20px;
+                background: rgba(0, 0, 0, 0.8);
+                color: white;
+                padding: 12px 16px;
+                border-radius: 8px;
+                font-family: monospace;
+                font-size: 12px;
+                z-index: 10000;
+                box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+                min-width: 200px;
+                transition: all 0.3s ease;
+            `;
+            document.body.appendChild(notification);
+            transferNotification = notification;
+            return notification;
+        }
+
+        function updateNotification() {
+            if (!transferNotification) return;
+
+            const progress = requestsToMake > 0 ? (requestsCompleted / requestsToMake) * 100 : 0;
+            const transferredMB = (totalBytesTransferred / 1024 / 1024).toFixed(1);
+            const estimatedMB = (bytesToTransfer / 1024 / 1024).toFixed(1);
+
+            transferNotification.innerHTML = `
+                <div style="margin-bottom: 4px;">📦 Merging split files</div>
+                <div style="margin-bottom: 4px;">Parts: ${requestsCompleted}/${requestsToMake}</div>
+                <div style="margin-bottom: 6px;">Data: ${transferredMB}MB${bytesToTransfer > 0 ? ' / ' + estimatedMB + 'MB' : ''}</div>
+                <div style="background: rgba(255,255,255,0.2); height: 4px; border-radius: 2px; overflow: hidden;">
+                    <div style="background: #4CAF50; height: 100%; width: ${progress}%; transition: width 0.3s ease;"></div>
+                </div>
+            `;
+        }
+
+        function showNotification() {
+            const notification = createNotification();
+            notification.style.opacity = '1';
+            notification.style.transform = 'translateX(0)';
+            updateNotification();
+
+            // Clear any existing hide timeout
+            if (hideTimeout) {
+                clearTimeout(hideTimeout);
+                hideTimeout = null;
+            }
+        }
+
+        function scheduleHide() {
+            if (hideTimeout) clearTimeout(hideTimeout);
+
+            hideTimeout = setTimeout(() => {
+                if (transferNotification) {
+                    transferNotification.style.opacity = '0';
+                    transferNotification.style.transform = 'translateX(100%)';
+                    setTimeout(() => {
+                        if (transferNotification) {
+                            transferNotification.remove();
+                            transferNotification = null;
+                        }
+                        // Reset counters
+                        requestsToMake = 0;
+                        requestsCompleted = 0;
+                        totalBytesTransferred = 0;
+                        bytesToTransfer = 0;
+                    }, 300);
+                }
+            }, 5000);
+        }
+
+        function trackPartFound(partUrl) {
+            requestsToMake++;
+            showNotification();
+
+            // Asynchronously get the content-length
+            origFetch(partUrl, { method: 'HEAD' })
+                .then(response => {
+                    if (response.ok) {
+                        const contentLength = response.headers.get('content-length');
+                        if (contentLength) {
+                            bytesToTransfer += parseInt(contentLength);
+                            updateNotification();
+                        }
+                    }
+                })
+                .catch(error => {
+                    console.log('Failed to get HEAD for', partUrl, error);
+                });
+        }
+
+        function trackPartCompleted(partSize) {
+            requestsCompleted++;
+            totalBytesTransferred += partSize;
+            updateNotification();
+
+            if (requestsCompleted >= requestsToMake) {
+                scheduleHide();
+            }
+        }
+
+        // Helper to check if a URL is relative
+        function isRelative(url) {
+            const result = typeof url === 'string' && !/^(?:[a-z]+:)?\/\//i.test(url) && url[0] !== '/';
+            return result;
+        }
+
+        // Patch fetch
+        var origFetch = window.fetch;
+        window.fetch = async function (input, init) {
+            if (typeof input === 'string' && isRelative(input)) {
+                input = CDN_BASE + input;
+            } else if (input && input.url && isRelative(input.url)) {
+                input = new Request(CDN_BASE + input.url, input);
+            }
+            const response = origFetch.call(this, input, init);
+            const res = await response;
+
+
+            if (res.status === 403) {
+                const body = await res.text();
+                const toLargeText = `File size exceeded the configured limit of 20 MB`;
+                if (body.includes(toLargeText)) {
+                    console.log('fetch: file too large, merging parts for', input instanceof Request ? input.url : input);
+                    try {
+                        return await merge(input instanceof Request ? input.url : input);
+                    } catch (mergeError) {
+                        console.error('fetch merge failed:', mergeError);
+                        return res; // Return the original 403 response
+                    }
+                } else {
+                    console.log('fetch: other 403 error');
+                    return res;
+                }
+            }
+            return res;
+        };
+
+        // Patch XMLHttpRequest
+        var OrigXHR = window.XMLHttpRequest;
+        function PatchedXHR() {
+            var xhr = new OrigXHR();
+            var origOpen = xhr.open;
+            var origSend = xhr.send;
+
+            var _url;
+            var _originalResponseType = '';
+            var _responseTypeSet = false;
+
+            xhr.open = function (method, url) {
+                if (isRelative(url)) {
+                    url = CDN_BASE + url;
+                }
+                _url = url;
+                return origOpen.apply(xhr, arguments);
+            };
+
+            // Override responseType property
+            Object.defineProperty(xhr, 'responseType', {
+                get: function () {
+                    return _originalResponseType;
+                },
+                set: function (value) {
+                    _originalResponseType = value;
+                    _responseTypeSet = true;
+                    // Set it on the actual XHR immediately for normal requests
+                    try {
+                        Object.getPrototypeOf(xhr).constructor.prototype.__lookupSetter__('responseType').call(xhr, value);
+                    } catch (e) {
+                        // Fallback if direct prototype access fails
+                        xhr.__proto__.responseType = value;
+                    }
+                },
+                configurable: true
+            });
+
+            xhr.send = function () {
+
+                var origOnReadyStateChange = xhr.onreadystatechange;
+                var origOnLoad = xhr.onload;
+                var origOnError = xhr.onerror;
+
+                xhr.onreadystatechange = function () {
+                    if (xhr.readyState === 4) {
+                        if (xhr.status === 403) {
+                            // Prevent original callbacks from firing during our check
+                            xhr.onreadystatechange = null;
+                            xhr.onload = null;
+                            xhr.onerror = null;
+
+                            // Make a separate fetch request to check the error message using original fetch
+                            origFetch(_url).then(response => {
+                                if (response.status === 403) {
+                                    return response.text().then(body => {
+                                        const toLargeText = `File size exceeded the configured limit of 20 MB`;
+
+                                        if (body.includes(toLargeText)) {
+                                            return merge(_url).then(mergedRes => {
+                                                if (_originalResponseType === 'arraybuffer') {
+                                                    return mergedRes.arrayBuffer().then(buffer => {
+                                                        // Mock successful response
+                                                        Object.defineProperty(xhr, 'status', {
+                                                            value: 200,
+                                                            configurable: true,
+                                                            writable: true
+                                                        });
+                                                        Object.defineProperty(xhr, 'response', {
+                                                            value: buffer,
+                                                            configurable: true,
+                                                            writable: true
+                                                        });
+                                                        Object.defineProperty(xhr, 'readyState', {
+                                                            value: 4,
+                                                            configurable: true,
+                                                            writable: true
+                                                        });
+
+                                                        // Restore and trigger callbacks
+                                                        xhr.onreadystatechange = origOnReadyStateChange;
+                                                        xhr.onload = origOnLoad;
+                                                        xhr.onerror = origOnError;
+
+                                                        if (origOnLoad) {
+                                                            setTimeout(() => origOnLoad.call(xhr), 0);
+                                                        }
+                                                        if (origOnReadyStateChange) {
+                                                            setTimeout(() => origOnReadyStateChange.call(xhr), 0);
+                                                        }
+                                                    });
+                                                } else {
+                                                    return mergedRes.text().then(text => {
+                                                        Object.defineProperty(xhr, 'status', {
+                                                            value: 200,
+                                                            configurable: true,
+                                                            writable: true
+                                                        });
+                                                        Object.defineProperty(xhr, 'response', {
+                                                            value: text,
+                                                            configurable: true,
+                                                            writable: true
+                                                        });
+                                                        Object.defineProperty(xhr, 'responseText', {
+                                                            value: text,
+                                                            configurable: true,
+                                                            writable: true
+                                                        });
+                                                        Object.defineProperty(xhr, 'readyState', {
+                                                            value: 4,
+                                                            configurable: true,
+                                                            writable: true
+                                                        });
+
+                                                        // Restore and trigger callbacks
+                                                        xhr.onreadystatechange = origOnReadyStateChange;
+                                                        xhr.onload = origOnLoad;
+                                                        xhr.onerror = origOnError;
+
+                                                        if (origOnLoad) {
+                                                            setTimeout(() => origOnLoad.call(xhr), 0);
+                                                        }
+                                                        if (origOnReadyStateChange) {
+                                                            setTimeout(() => origOnReadyStateChange.call(xhr), 0);
+                                                        }
+                                                    });
+                                                }
+                                            }).catch(mergeError => {
+                                                console.error('Merge failed:', mergeError);
+                                                // Restore callbacks and let the original 403 error through
+                                                xhr.onreadystatechange = origOnReadyStateChange;
+                                                xhr.onload = origOnLoad;
+                                                xhr.onerror = origOnError;
+                                                if (origOnReadyStateChange) {
+                                                    setTimeout(() => origOnReadyStateChange.call(xhr), 0);
+                                                }
+                                            });
+                                        } else {
+                                            // Not a file size error, restore original callbacks and let it fail normally
+                                            xhr.onreadystatechange = origOnReadyStateChange;
+                                            xhr.onload = origOnLoad;
+                                            xhr.onerror = origOnError;
+                                            if (origOnReadyStateChange) {
+                                                setTimeout(() => origOnReadyStateChange.call(xhr), 0);
+                                            }
+                                        }
+                                    });
+                                } else {
+                                    // Shouldn't happen, but restore callbacks
+                                    xhr.onreadystatechange = origOnReadyStateChange;
+                                    xhr.onload = origOnLoad;
+                                    xhr.onerror = origOnError;
+                                    if (origOnReadyStateChange) {
+                                        setTimeout(() => origOnReadyStateChange.call(xhr), 0);
+                                    }
+                                }
+                            }).catch(error => {
+                                console.error('Error checking 403 response:', error);
+                                // Restore callbacks and trigger error
+                                xhr.onreadystatechange = origOnReadyStateChange;
+                                xhr.onload = origOnLoad;
+                                xhr.onerror = origOnError;
+                                if (origOnError) {
+                                    setTimeout(() => origOnError.call(xhr), 0);
+                                }
+                            });
+
+                            return; // Don't call original callback yet
+                        }
+                    }
+
+                    if (origOnReadyStateChange) origOnReadyStateChange.call(xhr);
+                };
+
+                return origSend.apply(xhr, arguments);
+            };
+
+            return xhr;
+        }
+        PatchedXHR.prototype = OrigXHR.prototype;
+        window.XMLHttpRequest = PatchedXHR;
+
+        async function merge(filename) {
+
+            const BATCH_SIZE = 3;
+            let allParts = [];
+            let partIndex = 1;
+            let availableParts = []; // Track which parts actually exist
+
+            // First, discover all available parts
+            while (true) {
+                // Create batch of part requests to check availability
+                const batchPromises = [];
+                const batchStartIndex = partIndex;
+
+                for (let i = 0; i < BATCH_SIZE; i++) {
+                    const currentPartIndex = partIndex + i;
+                    const partFilename = `${filename}.part${currentPartIndex}`;
+
+                    batchPromises.push(
+                        origFetch(partFilename, { method: 'HEAD' })
+                            .then(response => ({
+                                index: currentPartIndex,
+                                url: partFilename,
+                                exists: response.ok
+                            }))
+                            .catch(error => ({
+                                index: currentPartIndex,
+                                url: partFilename,
+                                exists: false
+                            }))
+                    );
+                }
+
+                const batchResults = await Promise.all(batchPromises);
+                let foundInBatch = 0;
+
+                for (const result of batchResults) {
+                    if (result.exists) {
+                        availableParts.push(result.index);
+                        trackPartFound(result.url);
+                        foundInBatch++;
+                    } else {
+                        break; // Stop when we hit the first missing part
+                    }
+                }
+
+                if (foundInBatch < BATCH_SIZE) {
+                    break;
+                }
+
+                partIndex += BATCH_SIZE;
+            }
+
+            if (availableParts.length === 0) {
+                throw new Error('No parts found for merging');
+            }
+
+
+            // Now fetch all the parts we discovered in batches
+            for (let i = 0; i < availableParts.length; i += BATCH_SIZE) {
+                const batchParts = availableParts.slice(i, i + BATCH_SIZE);
+                const batchPromises = [];
+
+                for (const partIndex of batchParts) {
+                    const partFilename = `${filename}.part${partIndex}`;
+
+                    batchPromises.push(
+                        origFetch(partFilename)
+                            .then(async response => {
+                                if (response.ok) {
+                                    const partData = await response.arrayBuffer();
+                                    trackPartCompleted(partData.byteLength);
+                                    return {
+                                        index: partIndex,
+                                        data: partData,
+                                        success: true
+                                    };
+                                } else {
+                                    throw new Error(`Failed to fetch part ${partIndex}`);
+                                }
+                            })
+                            .catch(error => ({
+                                index: partIndex,
+                                data: null,
+                                success: false,
+                                error: error
+                            }))
+                    );
+                }
+
+                const batchResults = await Promise.all(batchPromises);
+
+                // Process batch results
+                for (const result of batchResults) {
+                    if (result.success) {
+                        allParts.push({
+                            index: result.index,
+                            data: result.data
+                        });
+                    } else {
+                        console.error(`Failed to fetch part ${result.index}:`, result.error);
+                        throw new Error(`Failed to fetch part ${result.index}`);
+                    }
+                }
+            }
+
+            // Sort parts by index to ensure correct order
+            allParts.sort((a, b) => a.index - b.index);
+
+            const totalSize = allParts.reduce((acc, part) => acc + part.data.byteLength, 0);
+            const combinedData = new Uint8Array(totalSize);
+
+            let offset = 0;
+            for (const part of allParts) {
+                combinedData.set(new Uint8Array(part.data), offset);
+                offset += part.data.byteLength;
+            }
+
+            return new Response(combinedData);
+        }
+
+
+        if (navigator && navigator.serviceWorker) {
+            const oldRegister = navigator.serviceWorker.register;
+            navigator.serviceWorker.register = async function (scriptURL, options) {
+                if (scriptURL && typeof scriptURL === 'string') {
+                    if (isRelative(scriptURL)) {
+                        const cdnURL = CDN_BASE + scriptURL;
+                        console.log('Service worker needs CDN URL:', cdnURL);
+                        
+                        // Create a proxy service worker that imports from CDN
+                        // Since service workers must be same-origin, we create a local proxy
+                        const proxyWorkerCode = `
+                            // Proxy service worker for CDN content
+                            self.addEventListener('install', function(event) {
+                                console.log('Proxy service worker installing');
+                                self.skipWaiting();
+                            });
+
+                            self.addEventListener('activate', function(event) {
+                                console.log('Proxy service worker activating');
+                                event.waitUntil(self.clients.claim());
+                            });
+
+                            // Import and execute the actual service worker from CDN
+                            fetch('${cdnURL}')
+                                .then(response => response.text())
+                                .then(code => {
+                                    // Execute the CDN service worker code in this context
+                                    eval(code);
+                                })
+                                .catch(error => {
+                                    console.error('Failed to load service worker from CDN:', error);
+                                });
+                        `;
+                        
+                        const blob = new Blob([proxyWorkerCode], { type: 'application/javascript' });
+                        const blobURL = URL.createObjectURL(blob);
+                        console.log('Proxy service worker blob created:', blobURL);
+                        return oldRegister.call(navigator.serviceWorker, blobURL, options);
+                    }
+                }
+                return oldRegister.call(navigator.serviceWorker, scriptURL, options);
+            }
+        }
+
+        // Patch Worker to allow remote origins
+        if (window.Worker) {
+            const OrigWorker = window.Worker;
+            window.Worker = function (scriptURL, options) {
+                // Don't patch blob URLs or data URLs - they're already valid
+                if (scriptURL && typeof scriptURL === 'string' && 
+                    !scriptURL.startsWith('blob:') && 
+                    !scriptURL.startsWith('data:') && 
+                    isRelative(scriptURL)) {
+                    scriptURL = CDN_BASE + scriptURL;
+                    console.log('Worker scriptURL patched to:', scriptURL);
+                }
+                
+                // If scriptURL is remote HTTPS/HTTP, we need to fetch and create data URL
+                if (typeof scriptURL === 'string' && /^https?:\/\//.test(scriptURL)) {
+                    console.log(scriptURL, 'is remote, creating data URL worker');
+                    
+                    // Extract the base URL for the worker to use
+                    const workerBaseURL = scriptURL.substring(0, scriptURL.lastIndexOf('/') + 1);
+                    
+                    // Create a worker with CDN context and fetch patching
+                    const workerCode = `
+                        // Set up CDN base for this worker
+                        const WORKER_CDN_BASE = '${workerBaseURL}';
+                        
+                        // Patch fetch in worker context to handle relative URLs
+                        const origWorkerFetch = self.fetch;
+                        self.fetch = function(input, init) {
+                            if (typeof input === 'string' && !/^(?:[a-z]+:)?\\/\\//i.test(input) && input[0] !== '/') {
+                                // Relative URL, prepend CDN base
+                                input = WORKER_CDN_BASE + input;
+                                console.log('Worker fetch patched to:', input);
+                            }
+                            return origWorkerFetch.call(this, input, init);
+                        };
+                        
+                        // Load the actual worker script
+                        fetch('${scriptURL}')
+                            .then(response => response.text())
+                            .then(code => {
+                                console.log('Worker script loaded, executing...');
+                                // Execute the CDN worker code with patched fetch
+                                eval(code);
+                            })
+                            .catch(error => {
+                                console.error('Failed to load worker script from CDN:', error);
+                                self.postMessage({error: 'Failed to load worker script', details: error.message});
+                            });
+                    `;
+                    
+                    // Create data URL instead of blob
+                    const encodedWorkerCode = encodeURIComponent(workerCode);
+                    const dataURL = `data:application/javascript,${encodedWorkerCode}`;
+                    return new OrigWorker(dataURL, options);
+                }
+                return new OrigWorker(scriptURL, options);
+            };
+            window.Worker.prototype = OrigWorker.prototype;
+        }
+    })();
+</script>
+    
+<!-- Component components/gtag_events -->
+
+<!-- End component components/gtag_events -->
+
+    <meta charset="utf-8">
+    <link rel="icon" href="./favicon_circle.svg">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <meta name="theme-color" content="#ffffff">
+    <title>Slow Roads | Unblocked on CCPorted</title>
+    <meta name="title" content="s l o w  r o a d s">
+    <meta name="description" content="Endless driving zen.">
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="https://slowroads.io/">
+    <meta property="og:title" content="s l o w  r o a d s">
+    <meta property="og:description" content="endless driving zen in your browser">
+    <meta property="og:image" content="./img.jpg">
+    <meta property="twitter:card" content="summary_large_image">
+    <meta property="twitter:url" content="https://slowroads.io/">
+    <meta property="twitter:title" content="s l o w  r o a d s">
+    <meta property="twitter:description" content="endless driving zen in your browser">
+    <script src="./alea.min.js"></script>
+    <link href="./static/css/main.8b77de6a.chunk.css" rel="stylesheet">
+  <script>(()=>{
+                        const script = document.createElement('script');
+                        window.gameID = "undefined";
+                        window.ccPorted = {
+                            gameID: "undefined"
+                        }
+                        script.src = '/big_game_script.js?cacheBust='+new Date().getTime();
+                        document.head.appendChild(script);
+                    })()</script></head>
+  <body>
+    <noscript>You need to enable JavaScript to run this app.</noscript>
+    <div id="root"></div>
+    <script>
+      !(function (e) {
+        function r(r) {
+          for (
+            var n, a, i = r[0], c = r[1], l = r[2], f = 0, p = [];
+            f < i.length;
+            f++
+          )
+            (a = i[f]),
+              Object.prototype.hasOwnProperty.call(o, a) &&
+                o[a] &&
+                p.push(o[a][0]),
+              (o[a] = 0);
+          for (n in c)
+            Object.prototype.hasOwnProperty.call(c, n) && (e[n] = c[n]);
+          for (s && s(r); p.length; ) p.shift()();
+          return u.push.apply(u, l || []), t();
+        }
+        function t() {
+          for (var e, r = 0; r < u.length; r++) {
+            for (var t = u[r], n = !0, i = 1; i < t.length; i++) {
+              var c = t[i];
+              0 !== o[c] && (n = !1);
+            }
+            n && (u.splice(r--, 1), (e = a((a.s = t[0]))));
+          }
+          return e;
+        }
+        var n = {},
+          o = { 1: 0 },
+          u = [];
+        function a(r) {
+          if (n[r]) return n[r].exports;
+          var t = (n[r] = { i: r, l: !1, exports: {} });
+          return e[r].call(t.exports, t, t.exports, a), (t.l = !0), t.exports;
+        }
+        (a.e = function (e) {
+          var r = [],
+            t = o[e];
+          if (0 !== t)
+            if (t) r.push(t[2]);
+            else {
+              var n = new Promise(function (r, n) {
+                t = o[e] = [r, n];
+              });
+              r.push((t[2] = n));
+              var u,
+                i = document.createElement("script");
+              (i.charset = "utf-8"),
+                (i.timeout = 120),
+                a.nc && i.setAttribute("nonce", a.nc),
+                (i.src = (function (e) {
+                  return (
+                    a.p +
+                    "static/js/" +
+                    ({}[e] || e) +
+                    "." +
+                    { 3: "37460af1" }[e] +
+                    ".chunk.js"
+                  );
+                })(e));
+              var c = new Error();
+              u = function (r) {
+                (i.onerror = i.onload = null), clearTimeout(l);
+                var t = o[e];
+                if (0 !== t) {
+                  if (t) {
+                    var n = r && ("load" === r.type ? "missing" : r.type),
+                      u = r && r.target && r.target.src;
+                    (c.message =
+                      "Loading chunk " +
+                      e +
+                      " failed.\n(" +
+                      n +
+                      ": " +
+                      u +
+                      ")"),
+                      (c.name = "ChunkLoadError"),
+                      (c.type = n),
+                      (c.request = u),
+                      t[1](c);
+                  }
+                  o[e] = void 0;
+                }
+              };
+              var l = setTimeout(function () {
+                u({ type: "timeout", target: i });
+              }, 12e4);
+              (i.onerror = i.onload = u), document.head.appendChild(i);
+            }
+          return Promise.all(r);
+        }),
+          (a.m = e),
+          (a.c = n),
+          (a.d = function (e, r, t) {
+            a.o(e, r) ||
+              Object.defineProperty(e, r, { enumerable: !0, get: t });
+          }),
+          (a.r = function (e) {
+            "undefined" != typeof Symbol &&
+              Symbol.toStringTag &&
+              Object.defineProperty(e, Symbol.toStringTag, { value: "Module" }),
+              Object.defineProperty(e, "__esModule", { value: !0 });
+          }),
+          (a.t = function (e, r) {
+            if ((1 & r && (e = a(e)), 8 & r)) return e;
+            if (4 & r && "object" == typeof e && e && e.__esModule) return e;
+            var t = Object.create(null);
+            if (
+              (a.r(t),
+              Object.defineProperty(t, "default", { enumerable: !0, value: e }),
+              2 & r && "string" != typeof e)
+            )
+              for (var n in e)
+                a.d(
+                  t,
+                  n,
+                  function (r) {
+                    return e[r];
+                  }.bind(null, n)
+                );
+            return t;
+          }),
+          (a.n = function (e) {
+            var r =
+              e && e.__esModule
+                ? function () {
+                    return e.default;
+                  }
+                : function () {
+                    return e;
+                  };
+            return a.d(r, "a", r), r;
+          }),
+          (a.o = function (e, r) {
+            return Object.prototype.hasOwnProperty.call(e, r);
+          }),
+          (a.p = "./"),
+          (a.oe = function (e) {
+            throw (console.error(e), e);
+          });
+        var i = (this["webpackJsonpslowroads.io"] =
+            this["webpackJsonpslowroads.io"] || []),
+          c = i.push.bind(i);
+        (i.push = r), (i = i.slice());
+        for (var l = 0; l < i.length; l++) r(i[l]);
+        var s = c;
+        t();
+      })([]);
+    </script>
+    <script src="./static/js/2.feea8a5f.chunk.js"></script>
+    <script src="./static/js/main.ca6b3355.chunk.js"></script>
+  
+
+</body></html>
