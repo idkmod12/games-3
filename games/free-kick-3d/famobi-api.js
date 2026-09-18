@@ -22,12 +22,6 @@ var _fgq = [];
 	firstJS.parentNode.insertBefore(fgJS, firstJS);
 })(document, 'https://api.famobi.com/assets/0.2-9fd556a0/js/gameapi.js');
 
-window.famobi_ts = 1789859676000;
-if ((new Date).getTime() > famobi_ts) {
-	window.famobi_gameJS.push(function() {
-		window.location = '//play.famobi.com/';
-	});
-}
 (function (document, url, newJS, firstJS) {
 	newJS = document.createElement('script');
 	newJS.setAttribute('async', true);
