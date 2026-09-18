@@ -7,13 +7,16 @@
   <title>3D Free Kick</title>
   <base href="https://games.cdn.famobi.com/html5games/0/3d-free-kick/16498237/">
   <style>html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#000;touch-action:none;-webkit-user-select:none;user-select:none}#openfl-content{position:absolute;inset:0;width:100%;height:100%;background:#000;touch-action:none}</style>
-  <script>
-    window.addEventListener('touchmove',function(e){e.preventDefault()},{passive:false});
-    window.famobi_gameID='3d-free-kick';
-    window.famobi_gameJS=['base64Logo.js','iOS.js','lib/howler.min.js','lib/pako.min.js','game.js',function(){if(window.famobi&&famobi.onOffsetChange&&window.iOSjs)famobi.onOffsetChange(function(){iOSjs.resize()});if(window.lime&&lime.embed)lime.embed('openfl-content',0,0,'2B8B1E');}];
-    (function(d){var s=d.createElement('script');s.src='https://api.famobi.com/gameapi/script/2ee096ab-4cd7-4f9a-baa9-f58a54413c47/4638e320-4444-4514-81c4-d80a8c662371?_location='+encodeURIComponent('https://games.cdn.famobi.com/html5games/0/3d-free-kick/16498237/index.html');s.async=false;d.head.appendChild(s)})(document);
-  </script>
 </head>
-<body><div id="openfl-content" aria-label="3D Free Kick"></div></body>
+<body>
+  <div id="openfl-content" aria-label="3D Free Kick"></div>
+  <script>
+    var fenster = window;
+    window.famobi_gameID = '3d-free-kick';
+    window.famobi_analytics = {EVENT_LEVELFAIL:'EVENT_LEVELFAIL',EVENT_LEVELRESTART:'EVENT_LEVELRESTART',EVENT_LEVELSTART:'EVENT_LEVELSTART',EVENT_LEVELSUCCESS:'EVENT_LEVELSUCCESS',EVENT_LEVELSCORE:'EVENT_LEVELSCORE',EVENT_TOTALSCORE:'EVENT_TOTALSCORE',EVENT_LIVESCORE:'EVENT_LIVESCORE',EVENT_TUTORIALCOMPLETED:'EVENT_TUTORIALCOMPLETED',EVENT_TUTORIALSKIPPED:'EVENT_TUTORIALSKIPPED',EVENT_VOLUMECHANGE:'EVENT_VOLUMECHANGE',SCREEN_BONUS:'SCREEN_BONUS',SCREEN_CHARACTER:'SCREEN_CHARACTER',SCREEN_CREDITS:'SCREEN_CREDITS',SCREEN_GAMERESULT:'SCREEN_GAMERESULT',SCREEN_HELP:'SCREEN_HELP',SCREEN_HOME:'SCREEN_HOME',SCREEN_LEVEL:'SCREEN_LEVEL',SCREEN_LEVELINTRO:'SCREEN_LEVELINTRO',SCREEN_LEVELLOADING:'SCREEN_LEVELLOADING',SCREEN_LEVELRESULT:'SCREEN_LEVELRESULT',SCREEN_LEVELSELECT:'SCREEN_LEVELSELECT',SCREEN_PAUSE:'SCREEN_PAUSE',SCREEN_SETTINGS:'SCREEN_SETTINGS',SCREEN_SHOP:'SCREEN_SHOP',SCREEN_SPLASH:'SCREEN_SPLASH',SCREEN_TUTORIAL:'SCREEN_TUTORIAL',getPageTitle:function(){return '3D Free Kick';},trackEvent:function(){},trackScreen:function(){},trackStats:function(){}};
+    window.famobi = {localStorage:window.localStorage,sessionStorage:window.sessionStorage,hasFeature:function(){return false;},getFeatureProperties:function(){return {};},getVolume:function(){return 1;},getBrandingButtonImage:function(){return '';},getMoreGamesButtonImage:function(){return '';},onRequest:function(){},onOffsetChange:function(){},playerReady:function(){},gameReady:function(){},setPreloadProgress:function(){},moreGamesLink:'',json:{gameParams:{features:{}}}};
+  </script>
+  <script src="base64Logo.js"></script><script src="iOS.js"></script><script src="lib/howler.min.js"></script><script src="lib/pako.min.js"></script><script src="game.js"></script>
+  <script>(function start(){if(window.lime&&typeof window.lime.embed==='function')window.lime.embed('openfl-content',0,0,'2B8B1E');else window.setTimeout(start,50);}());</script>
+</body>
 </html>
-
